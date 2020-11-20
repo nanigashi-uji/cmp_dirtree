@@ -1,0 +1,376 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import os
+import os.path
+import datetime
+import argparse
+import copy
+import re
+import filecmp
+
+def get_ctime(p):
+    if os.path.exists(p):
+        return os.path.getctime(p)
+    else:
+        return 0
+
+def get_mtime(p):
+    if os.path.exists(p):
+        return os.path.getmtime(p)
+    else:
+        return 0
+
+def get_size(p):
+    if os.path.exists(p):
+        return os.path.getsize(p)
+    else:
+        return 0
+
+def get_realpath(p):
+    if os.path.exists(p):
+        return os.path.realpath(p)
+    else:
+        return ""
+        
+def dir_contents(dirname):
+    """
+    Return Value: Tuple( name,
+                         subdirectory_list, 
+                         symlink_directory_list,
+                         file_list, 
+                         symlink_file_list,
+                     )
+    each data:  Tuple 
+              directory:          ( name, ctime, mtime, size) 
+              symlink_directory:  ( name, ctime, mtime, size, realpath) 
+              file:               ( name, ctime, mtime, size) 
+              symlink_file:       ( name, ctime, mtime, size, realpath) 
+    """
+
+    dir_tree  = {}
+    full_list = []
+
+    for root,dirs,files in os.walk(dirname):
+
+        if dirname.endswith('/'):
+            spath = root.replace(dirname, '', 1)
+        else:
+            spath = root.replace(dirname+'/', '', 1)
+
+        dir_tree.update({spath: (spath, {}, {}, {}, {})})
+
+        # dirs.sort()
+        # files.sort()
+
+        for d in dirs:
+            full_list.append(os.path.join(spath, d))
+            fpath = os.path.join(root,d)
+            if os.path.islink(fpath):
+                dir_tree[spath][2].update({d: (d,
+                                               get_ctime(fpath),
+                                               get_mtime(fpath),
+                                               get_size(fpath),
+                                               get_realpath(fpath))})
+            else:
+                dir_tree[spath][1].update({d: (d,
+                                               get_ctime(fpath),
+                                               get_mtime(fpath),
+                                               get_size(fpath))})
+        for f in files:
+            full_list.append(os.path.join(spath, f))
+            fpath = os.path.join(root,f)
+            if os.path.islink(fpath):
+                dir_tree[spath][4].update({f: (f,
+                                               get_ctime(fpath),
+                                               get_mtime(fpath),
+                                               get_size(fpath),
+                                               get_realpath(fpath))})
+            else:
+                dir_tree[spath][3].update({f: (f,
+                                               get_ctime(fpath),
+                                               get_mtime(fpath),
+                                               get_size(fpath))})
+
+    return (dir_tree, full_list)
+
+
+def addkey_to_set(buf, d_tree, cs=True):
+    if cs:
+        for c in d_tree.keys():
+            buf.add(c)
+    else:
+        for c in d_tree.keys():
+            if c in buf:
+                continue
+            else:
+                chk=True
+                for n in buf:
+                    if n.lower()==c.lower():
+                        chk=False
+                        break
+                if chk:
+                    buf.add(c)
+
+def chk_key(alist, name, cs=True):
+    if cs:
+        return alist.get(name, None)
+    else:
+        for k,v in alist.items():
+            if k.lower()==name.lower():
+                return v
+    return None
+
+def show_diff(dir0, dir1):
+    (d_tree0, flst0) = dir_contents(dir0)
+    (d_tree1, flst1) = dir_contents(dir1)
+
+
+    fullset0=set(map(lambda x: x.lower(), flst0))
+    fullset1=set(map(lambda x: x.lower(), flst1))
+
+    nameset = set()
+    if len(fullset0)!=len(flst0):
+        flg_cs0 = True
+    else:
+        flg_cs0 = False
+
+    if len(fullset1)!=len(flst1):
+        flg_cs1 = True
+    else:
+        flg_cs1 = False
+
+    addkey_to_set(nameset, d_tree0, cs=flg_cs0)
+    addkey_to_set(nameset, d_tree1, cs=flg_cs1)
+
+    d = sorted(list(nameset))
+
+    regend = {dir0: "1:", dir1: "2:"}
+
+    print ("### ========================================")
+    print (regend[dir0]+' '+dir0)
+    print (regend[dir1]+' '+dir1)
+    print ("### ========================================")
+    
+    for rt in d:
+        rt0 = chk_key(d_tree0, rt, cs=flg_cs0)
+        rt1 = chk_key(d_tree1, rt, cs=flg_cs1)
+        if rt0 is None and rt1 is None:
+            continue
+
+        if rt0 is not None and rt0[0] == dir0 and rt1 is None:
+            continue
+        if rt1 is not None and rt1[0] == dir1 and rt0 is None:
+            continue
+        
+        print ("###-----------------< "+rt+" >--------------------")
+
+        if rt0 is not None:
+            print ("%s %s" % (regend[dir0], os.path.join(dir0, rt0[0])))
+        else:
+            print ("%s --" % (regend[dir0]))
+        if rt1 is not None:
+            print ("%s %s" % (regend[dir1], os.path.join(dir1, rt1[0])))
+        else:
+            print ("%s --" % (regend[dir1]))
+
+        if rt0 is None or rt1 is None:
+            continue
+        
+        d_nameset = set()
+        addkey_to_set(d_nameset, rt0[1], cs=flg_cs0)
+        addkey_to_set(d_nameset, rt1[1], cs=flg_cs1)
+        d_names  =  sorted(list(d_nameset))
+
+        if len(d_names)>0:
+            print ("### Sub directories: ---")
+        for dn in d_names:
+            sd0 = chk_key(rt0[1], dn, cs=flg_cs0)
+            sd1 = chk_key(rt1[1], dn, cs=flg_cs1)
+
+            mtime_cmp_str = [' ', ' ']
+            size_cmp_str  = ['  ', '  ']
+            if sd0 is not None and sd1 is not None :
+                if sd0[2] == sd1[2] and sd0[2]>0:
+                    mtime_cmp_str = ['=', '=']
+                elif sd0[2] > sd1[2] and sd0[2]>0:
+                    mtime_cmp_str = ['>', '<']
+                elif sd0[2] < sd1[2] and sd1[2]>0:
+                    mtime_cmp_str = ['<', '>']
+
+                if sd0[3] == sd1[3]:
+                    size_cmp_str = ['==', '==']
+                elif sd0[3] > sd1[3]:
+                    size_cmp_str = ['++', '--']
+                elif sd0[3] < sd1[3]:
+                    size_cmp_str = ['--', '++']
+
+            if sd0 is None and sd1 is None:
+                continue
+
+            if sd0 is not None:
+                print ("%s  %s%s : %s : %12d : %s" % (regend[dir0], mtime_cmp_str[0], size_cmp_str[0],
+                                                     datetime.datetime.fromtimestamp(sd0[2]).strftime("%Y/%m/%d %H:%M:%S"), sd0[3], sd0[0]))
+            else:
+                print ("%s !%s%s : ~~" % (regend[dir0], mtime_cmp_str[0], size_cmp_str[0]))
+                
+            if sd1 is not None:
+                print ("%s  %s%s : %s : %12d : %s" % (regend[dir1], mtime_cmp_str[1], size_cmp_str[1],
+                                                     datetime.datetime.fromtimestamp(sd1[2]).strftime("%Y/%m/%d %H:%M:%S"), sd1[3], sd1[0]))
+            else:
+                print ("%s !%s%s : ~~" % (regend[dir1], mtime_cmp_str[1], size_cmp_str[1]))
+
+
+        dl_nameset = set()
+        addkey_to_set(dl_nameset, rt0[2], cs=flg_cs0)
+        addkey_to_set(dl_nameset, rt1[2], cs=flg_cs1)
+        dl_names  =  sorted(list(dl_nameset))
+
+        if len(dl_names)>0:
+            print ("### Sub directory links: ---")
+        for dln in dl_names:
+            sdl0 = chk_key(rt0[2], dln, cs=flg_cs0)
+            sdl1 = chk_key(rt1[2], dln, cs=flg_cs1)
+
+
+            mtime_cmp_str = [' ', ' ']
+            dest_cmp_str  = ['  ', '  ']
+            if sdl0 is not None and sdl1 is not None :
+                if sdl0[2] == sdl1[2] and sdl0[2]>0:
+                    mtime_cmp_str = ['=', '=']
+                elif sdl0[2] > sdl1[2] and sdl0[2]>0:
+                    mtime_cmp_str = ['>', '<']
+                elif sdl0[2] < sdl1[2] and sdl1[2]>0:
+                    mtime_cmp_str = ['<', '>']
+
+                if sdl0[4] == sdl0[4]:
+                    dest_cmp_str = ['  ', '  ']
+                else:
+                    dest_cmp_str = ['!!', '!!']
+
+            if sdl0 is None and sdl1 is None:
+                continue
+
+            if sdl0 is not None:
+                print ("%s  %s%s : %s : %12d : %s -> %s"
+                       % (regend[dir0], mtime_cmp_str[0], dest_cmp_str[0],
+                          datetime.datetime.fromtimestamp(sdl0[2]).strftime("%Y/%m/%d %H:%M:%S"), sdl0[3], sdl0[0], sdl0[4]))
+            else:
+                print ("%s !%s%s : ~~" % (regend[dir0], mtime_cmp_str[0], dest_cmp_str[0]))
+                
+            if sdl1 is not None:
+                print ("%s  %s%s : %s : %12d : %s -> %s"
+                       % (regend[dir1], mtime_cmp_str[1], dest_cmp_str[1],
+                          datetime.datetime.fromtimestamp(sdl1[2]).strftime("%Y/%m/%d %H:%M:%S"), sdl1[3], sdl1[0], sdl1[4]))
+            else:
+                print ("%s !%s%s : ~~" % (regend[dir1], mtime_cmp_str[1], dest_cmp_str[1]))
+
+        f_nameset = set()
+        addkey_to_set(f_nameset, rt0[3], cs=flg_cs0)
+        addkey_to_set(f_nameset, rt1[3], cs=flg_cs1)
+        f_names  =  sorted(list(f_nameset))
+
+        if len(f_names)>0:
+            print ("### File lists: ---")
+        for fn in f_names:
+            sf0 = chk_key(rt0[3], fn, cs=flg_cs0)
+            sf1 = chk_key(rt1[3], fn, cs=flg_cs1)
+
+            mtime_cmp_str = [' ', ' ']
+            size_cmp_str  = ['  ', '  ']
+            if sf0 is not None and sf1 is not None :
+                if sf0[2] == sf1[2] and sf0[2]>0:
+                    mtime_cmp_str = ['=', '=']
+                elif sf0[2] > sf1[2] and sf0[2]>0:
+                    mtime_cmp_str = ['>', '<']
+                elif sf0[2] < sf1[2] and sf1[2]>0:
+                    mtime_cmp_str = ['<', '>']
+
+                if sf0[3] == sf1[3]:
+                    if filecmp.cmp(os.path.join(dir0, rt0[0], sf0[0]),
+                                   os.path.join(dir1, rt1[0], sf1[0]),
+                                   shallow=False):
+                        size_cmp_str = ['==', '==']
+                    else:                    
+                        size_cmp_str = ['!=', '!=']
+
+                elif sf0[3] > sf1[3]:
+                    size_cmp_str = ['++', '--']
+                elif sf0[3] < sf1[3]:
+                    size_cmp_str = ['--', '++']
+
+            if sf0 is not None:
+                print ("%s  %s%s : %s : %12d : %s"
+                       % (regend[dir0], mtime_cmp_str[0], size_cmp_str[0],
+                          datetime.datetime.fromtimestamp(sf0[2]).strftime("%Y/%m/%d %H:%M:%S"), sf0[3], sf0[0]))
+            else:
+                print ("%s !%s%s : ~~" % (regend[dir0], mtime_cmp_str[0], size_cmp_str[0]))
+
+            if sf1 is not None:
+                print ("%s  %s%s : %s : %12d : %s"
+                       % (regend[dir1], mtime_cmp_str[1], size_cmp_str[1],
+                          datetime.datetime.fromtimestamp(sf1[2]).strftime("%Y/%m/%d %H:%M:%S"), sf1[3], sf1[0]))
+            else:
+                print ("%s !%s%s : ~~" % (regend[dir1], mtime_cmp_str[1], size_cmp_str[1]))
+
+
+        fl_nameset = set()
+        addkey_to_set(fl_nameset, rt0[4], cs=flg_cs0)
+        addkey_to_set(fl_nameset, rt1[4], cs=flg_cs1)
+        fl_names   = sorted(list(fl_nameset))
+
+        if len(fl_names)>0:
+            print (" ### Sub file links: ---")
+        for fln in fl_names:
+            sfl0 = chk_key(rt0[4], fln, cs=flg_cs0)
+            sfl1 = chk_key(rt1[4], fln, cs=flg_cs1)
+
+            mtime_cmp_str = [' ', ' ']
+            dest_cmp_str  = ['  ', '  ']
+            if sfl0 is not None and sfl1 is not None :
+                if sfl0[2] == sfl1[2] and sfl0[2]>0:
+                    mtime_cmp_str = ['=', '=']
+                elif sfl0[2] > sfl1[2] and sfl0[2]>0:
+                    mtime_cmp_str = ['>', '<']
+                elif sfl0[2] < sfl1[2] and sfl1[2]>0:
+                    mtime_cmp_str = ['<', '>']
+
+                if sfl0[4] == sfl0[4]:
+                    dest_cmp_str = ['  ', '  ']
+                else:
+                    dest_cmp_str = ['!!', '!!']
+
+            if sfl0 is None and sfl1 is None:
+                continue
+
+            if sfl0 is not None:
+                print ("%s  %s%s : %s : %12d : %s -> %s"
+                       % (regend[dir0], mtime_cmp_str[0], dest_cmp_str[0],
+                          datetime.datetime.fromtimestamp(sfl0[2]).strftime("%Y/%m/%d %H:%M:%S"), sfl0[3], sfl0[0], sfl0[4]))
+            else:
+                print ("%s !%s%s : ~~" % (regend[dir0], mtime_cmp_str[0], dest_cmp_str[0]))
+                
+            if sfl1 is not None:
+                print ("%s  %s%s : %s : %12d : %s -> %s"
+                       % (regend[dir1], mtime_cmp_str[1], dest_cmp_str[1],
+                          datetime.datetime.fromtimestamp(sfl1[2]).strftime("%Y/%m/%d %H:%M:%S"), sfl1[3], sfl1[0], sfl1[4]))
+            else:
+                print ("%s !%s%s : ~~" % (regend[dir1], mtime_cmp_str[1], dest_cmp_str[1]))
+
+def dir_str(s):
+    if os.path.isdir(s):
+        return s
+    else:
+        raise NotADirectoryError(s)
+
+def main():
+    argpsr = argparse.ArgumentParser(description='Check directory contents dupulication.')
+    argpsr.add_argument('dir0', metavar='dir0', type=dir_str,
+                        default='.', help='One of directory to be compared')
+    argpsr.add_argument('dir1', metavar='dir1', type=dir_str, nargs='?',
+                        default='.', help='Another directory to be compared. (Default=.)')
+    args=argpsr.parse_args()
+    show_diff(args.dir0, args.dir1)
+
+if __name__ == '__main__':
+    main()
